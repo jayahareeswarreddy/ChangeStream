@@ -144,6 +144,15 @@
     .copy-button:hover { color: var(--blue); }
     .copy-button svg { width: 15px; height: 15px; }
     .explain-copy { max-width: 700px; color: var(--muted); font-size: 13px; line-height: 1.6; }
+    .controls { margin-top: 15px; display: flex; flex-direction: column; gap: 10px; }
+    .control-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .field { min-height: 38px; padding: 0 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-solid); color: var(--ink); font: inherit; font-size: 13px; }
+    input.field { min-width: 118px; }
+    .field.short { width: 96px; min-width: 0; }
+    .control-hint { color: var(--muted); font-size: 11px; }
+    .button.danger { color: var(--red); border-color: color-mix(in srgb,var(--red) 40%,var(--line)); }
+    .button.danger:hover { background: var(--red-soft); border-color: var(--red); }
+    .control-result { margin: 3px 0 0; min-height: 16px; font-size: 12px; font-weight: 620; }
     .dead-empty { display: flex; align-items: center; gap: 10px; padding: 14px; border-radius: 14px; color: var(--green); background: var(--green-soft); font-size: 12px; font-weight: 600; }
     .check { width: 20px; height: 20px; display: grid; place-items: center; flex: 0 0 20px; border-radius: 50%; background: color-mix(in srgb,var(--green) 18%,transparent); }
     .check svg { width: 12px; height: 12px; }
@@ -211,9 +220,38 @@
 
     <section class="lower-grid" id="learn">
       <article class="panel explainer">
-        <div class="section-heading"><h2 class="section-title">Try a real database change</h2><span class="section-note">PowerShell · local demo</span></div>
-        <p class="explain-copy">Run this in a terminal from the ChangeStream folder. Debezium reads the committed row change from PostgreSQL’s WAL; the consumer applies it to the read model and the tables above refresh automatically.</p>
-        <div class="code-block"><pre id="demoCommand">docker compose exec postgres psql -U postgres -d source_db -c "INSERT INTO orders (customer_name, status, total_cents) VALUES ('Demo', 'created', 2500);"</pre><button class="copy-button" id="copyCommand" type="button" aria-label="Copy demo command"><svg viewBox="0 0 20 20" fill="none"><rect x="7" y="6" width="9" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M13 6V4a1 1 0 0 0-1-1H5a2 2 0 0 0-2 2v8a1 1 0 0 0 1 1h3" stroke="currentColor" stroke-width="1.5"/></svg></button></div>
+        <div class="section-heading"><h2 class="section-title">Drive the pipeline</h2><span class="section-note">Local demo · writes to source_db</span></div>
+        <p class="explain-copy">Make real changes to the source database right here — no terminal needed. Each action commits to PostgreSQL; Debezium captures it from the WAL and the tables above refresh automatically.</p>
+        <div class="controls">
+          <div class="control-row">
+            <input id="inName" class="field" type="text" placeholder="Customer name" value="Dashboard" aria-label="Customer name">
+            <select id="inStatus" class="field" aria-label="New order status">
+              <option value="created">created</option>
+              <option value="paid">paid</option>
+              <option value="shipped">shipped</option>
+              <option value="cancelled">cancelled</option>
+            </select>
+            <input id="inTotal" class="field short" type="number" min="0" placeholder="cents" value="2500" aria-label="Total in cents">
+            <button class="button primary" id="btnInsert" type="button">Insert order</button>
+          </div>
+          <div class="control-row">
+            <input id="upId" class="field short" type="number" min="1" placeholder="Order #" aria-label="Order id to update">
+            <select id="upStatus" class="field" aria-label="Updated status">
+              <option value="paid">paid</option>
+              <option value="shipped">shipped</option>
+              <option value="cancelled">cancelled</option>
+              <option value="created">created</option>
+            </select>
+            <button class="button" id="btnUpdate" type="button">Update status</button>
+            <input id="delId" class="field short" type="number" min="1" placeholder="Order #" aria-label="Order id to delete">
+            <button class="button" id="btnDelete" type="button">Delete</button>
+          </div>
+          <div class="control-row">
+            <button class="button danger" id="btnMalformed" type="button">Send malformed event</button>
+            <span class="control-hint">Publishes a bad message → watch it appear in the dead-letter queue.</span>
+          </div>
+          <p class="control-result" id="actionResult" role="status" aria-live="polite"></p>
+        </div>
       </article>
       <article class="panel dead-panel">
         <div class="section-heading"><h2 class="section-title">Dead-letter queue</h2><span class="section-note" id="deadCount">0 records</span></div>
@@ -277,11 +315,51 @@
     } catch (error) { $('updated').textContent = `Could not load pipeline data: ${error.message}`; }
   }
   $('refresh').addEventListener('click', refresh);
-  $('copyCommand').addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText($('demoCommand').textContent); $('toast').textContent = 'Command copied'; }
-    catch { $('toast').textContent = 'Clipboard permission unavailable'; }
-    $('toast').classList.add('show'); setTimeout(() => $('toast').classList.remove('show'), 1700);
+
+  async function postJSON(url, body) {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : null,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.detail || `Request failed (${response.status})`);
+    return data;
+  }
+  function showResult(text, ok = true) {
+    const element = $('actionResult');
+    element.textContent = text;
+    element.style.color = ok ? 'var(--green)' : 'var(--red)';
+  }
+  async function runAction(button, action) {
+    button.disabled = true;
+    try { const data = await action(); showResult(data.detail || 'Done.', true); await refresh(); }
+    catch (error) { showResult(error.message, false); }
+    finally { button.disabled = false; }
+  }
+  $('btnInsert').addEventListener('click', (event) => runAction(event.currentTarget, async () => {
+    const data = await postJSON('/api/demo/insert', {
+      customer_name: $('inName').value.trim() || 'Dashboard',
+      status: $('inStatus').value,
+      total_cents: Math.max(0, parseInt($('inTotal').value || '0', 10) || 0),
+    });
+    // Auto-fill the Update and Delete boxes with the order we just created,
+    // so the next action targets a row that is guaranteed to exist.
+    if (data.id != null) { $('upId').value = data.id; $('delId').value = data.id; }
+    return data;
+  }));
+  $('btnUpdate').addEventListener('click', (event) => {
+    const id = parseInt($('upId').value, 10);
+    if (!id) { showResult('Enter an order number to update.', false); return; }
+    runAction(event.currentTarget, () => postJSON('/api/demo/update', { id, status: $('upStatus').value }));
   });
+  $('btnDelete').addEventListener('click', (event) => {
+    const id = parseInt($('delId').value, 10);
+    if (!id) { showResult('Enter an order number to delete.', false); return; }
+    runAction(event.currentTarget, () => postJSON('/api/demo/delete', { id }));
+  });
+  $('btnMalformed').addEventListener('click', (event) => runAction(event.currentTarget, () => postJSON('/api/demo/malformed')));
+
   refresh(); setInterval(refresh, 3000);
 </script>
 </body>

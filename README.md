@@ -4,6 +4,18 @@ ChangeStream is a local-first CDC pipeline demo: PostgreSQL changes are read fro
 
 This repository is an educational single-node demo, not a production deployment. Its sample credentials, exposed ports, single Kafka broker, and unencrypted connections are intended only for a local machine.
 
+## Demo
+
+Because ChangeStream is a multi-service stack (PostgreSQL, Kafka, Kafka Connect/Debezium, a consumer, and the API), it runs locally with Docker Compose rather than on a hosted URL. The dashboard below drives the real pipeline — inserts, updates, deletes, and a deliberately malformed event — with no terminal required.
+
+![Drive the pipeline and the dead-letter queue](docs/dashboard-deadletter.png)
+
+The control panel writes to the source database; the dead-letter queue catches poison messages instead of blocking the stream.
+
+![Recent CDC events with Kafka offsets](docs/dashboard-events.png)
+
+The event log shows each operation with its Kafka offset. Offsets skip the quarantined messages (they are committed but never applied to the read model), which is the visible signature of at-least-once delivery with dead-letter handling.
+
 ## Architecture
 
 ```text
@@ -69,6 +81,8 @@ The first command reports each component's live health. The second is Debezium's
 
 ## Make a source change
 
+The quickest way is the **Drive the pipeline** panel on the dashboard at <http://localhost:8010>: insert, update, or delete an order, or send a malformed event, and watch the tables and dead-letter queue update. The equivalent `psql` commands are below if you prefer a terminal.
+
 Insert a row:
 
 ```powershell
@@ -126,7 +140,13 @@ docker compose start consumer
 | `GET /api/orders` | Current read-model orders |
 | `GET /api/events?limit=50` | Recent successfully applied Debezium events |
 | `GET /api/dead-letters?limit=25` | Quarantined malformed or unsupported records |
+| `POST /api/demo/insert` | Insert a sample order into `source_db` (`customer_name`, `status`, `total_cents`) |
+| `POST /api/demo/update` | Update a source order's status (`id`, `status`) |
+| `POST /api/demo/delete` | Delete a source order (`id`) |
+| `POST /api/demo/malformed` | Publish an invalid record to Kafka to demonstrate the dead-letter queue |
 | `GET /docs` | Interactive FastAPI API documentation |
+
+The `POST /api/demo/*` actions back the dashboard's control panel so the pipeline can be driven from the browser without a terminal. They are scoped to the sample `orders` table and are safe only for this local demo.
 
 ## Reset local demo data
 

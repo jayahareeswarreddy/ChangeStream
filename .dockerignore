@@ -1,0 +1,10 @@
+.git
+.gitignore
+.env
+**/__pycache__/
+**/*.py[cod]
+.venv/
+.pytest_cache/
+docs/
+README.md
+PROJECT_PROMPT.md

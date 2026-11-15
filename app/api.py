@@ -6,16 +6,17 @@ import os
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 import psycopg
-from confluent_kafka import ConsumerGroupTopicPartitions, TopicPartition
+from confluent_kafka import ConsumerGroupTopicPartitions, Producer, TopicPartition
 from confluent_kafka.admin import AdminClient, OffsetSpec
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from psycopg.rows import dict_row
+from pydantic import BaseModel, Field
 
 DATABASE_URL = os.getenv(
     "SINK_DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/read_model"
@@ -68,12 +69,12 @@ def broker_lag() -> int | None:
 
 @app.get("/", include_in_schema=False)
 def dashboard() -> FileResponse:
-    return FileResponse(INDEX_FILE)
+    return FileResponse(INDEX_FILE, headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/guide", include_in_schema=False)
 def guide() -> FileResponse:
-    return FileResponse(GUIDE_FILE)
+    return FileResponse(GUIDE_FILE, headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/api/health")
@@ -200,3 +201,87 @@ def dead_letters(limit: int = Query(default=25, ge=1, le=100)) -> list[dict[str,
         """,
         (limit,),
     )
+
+
+# ---------------------------------------------------------------------------
+# Demo write actions. These let the dashboard drive the pipeline without a
+# terminal. They are intentionally scoped to the sample orders table in the
+# local source database and are safe only for this local demo.
+# ---------------------------------------------------------------------------
+
+OrderStatus = Literal["created", "paid", "shipped", "cancelled"]
+_producer: Producer | None = None
+
+
+def get_producer() -> Producer:
+    global _producer
+    if _producer is None:
+        _producer = Producer({"bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS})
+    return _producer
+
+
+def source_write(query: str, params: tuple[Any, ...]) -> tuple[Any, ...] | None:
+    """Run a single parameterized write against the source orders table."""
+    try:
+        with psycopg.connect(SOURCE_DATABASE_URL, connect_timeout=3) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(query, params)
+                return cursor.fetchone()
+    except psycopg.Error as error:
+        raise HTTPException(status_code=503, detail="Could not write to source_db") from error
+
+
+class OrderInsert(BaseModel):
+    customer_name: str = Field(min_length=1, max_length=80)
+    status: OrderStatus = "created"
+    total_cents: int = Field(ge=0, le=100_000_000)
+
+
+class OrderUpdate(BaseModel):
+    id: int = Field(ge=1)
+    status: OrderStatus
+
+
+class OrderDelete(BaseModel):
+    id: int = Field(ge=1)
+
+
+@app.post("/api/demo/insert")
+def demo_insert(order: OrderInsert) -> dict[str, Any]:
+    row = source_write(
+        "INSERT INTO orders (customer_name, status, total_cents) VALUES (%s, %s, %s) RETURNING id",
+        (order.customer_name, order.status, order.total_cents),
+    )
+    new_id = row[0] if row else None
+    return {"ok": True, "id": new_id, "detail": f"Inserted order #{new_id} ({order.status})."}
+
+
+@app.post("/api/demo/update")
+def demo_update(order: OrderUpdate) -> dict[str, Any]:
+    row = source_write(
+        "UPDATE orders SET status = %s, updated_at = NOW() WHERE id = %s RETURNING id",
+        (order.status, order.id),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No order #{order.id} in source_db")
+    return {"ok": True, "id": order.id, "detail": f"Order #{order.id} is now {order.status}."}
+
+
+@app.post("/api/demo/delete")
+def demo_delete(order: OrderDelete) -> dict[str, Any]:
+    row = source_write("DELETE FROM orders WHERE id = %s RETURNING id", (order.id,))
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No order #{order.id} in source_db")
+    return {"ok": True, "id": order.id, "detail": f"Deleted order #{order.id}."}
+
+
+@app.post("/api/demo/malformed")
+def demo_malformed() -> dict[str, Any]:
+    """Publish a deliberately invalid record so the consumer quarantines it."""
+    try:
+        producer = get_producer()
+        producer.produce(KAFKA_TOPIC, key=b"demo-malformed", value=b"{ not valid debezium json")
+        producer.flush(5)
+    except Exception as error:  # noqa: BLE001 - surface any Kafka issue to the UI
+        raise HTTPException(status_code=503, detail="Could not reach Kafka") from error
+    return {"ok": True, "detail": "Sent a malformed event. It should land in the dead-letter queue."}
