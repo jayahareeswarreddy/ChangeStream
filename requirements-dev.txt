@@ -1,0 +1,3 @@
+# Test dependencies. Includes the app runtime deps so the consumer module imports.
+-r app/requirements.txt
+pytest>=8,<9

@@ -7,6 +7,7 @@ import logging
 import os
 import signal
 import time
+from dataclasses import dataclass
 from typing import Any
 
 import psycopg
@@ -38,24 +39,56 @@ def commit(consumer: Consumer, message: Any) -> None:
     consumer.commit(message=message, asynchronous=False)
 
 
-def apply_event(message: Any) -> None:
-    raw = message.value()
+@dataclass
+class ParsedEvent:
+    """A validated Debezium change event ready to apply to the read model."""
+
+    operation: str
+    order_id: int
+    row: dict[str, Any]
+    source_ts_ms: int | None
+    event: dict[str, Any]
+
+
+def parse_event(raw: bytes | str | None) -> ParsedEvent | None:
+    """Validate a raw Debezium message.
+
+    Returns ``None`` for a tombstone (Debezium emits a null value after a
+    delete). Raises ``json.JSONDecodeError`` or ``ValueError`` for malformed or
+    unsupported messages so the caller can route them to the dead-letter queue.
+    This function has no side effects, which makes the projection rules testable
+    without a database or Kafka.
+    """
     if raw is None:  # Debezium emits a null tombstone after a delete event.
-        return
+        return None
 
     event = json.loads(raw)
     if not isinstance(event, dict):
         raise ValueError("Change event must be a JSON object")
     operation = event.get("op")
-    row = event.get("before") if operation == "d" else event.get("after")
     if operation not in {"c", "u", "d", "r"}:
         raise ValueError(f"Unsupported Debezium operation: {operation!r}")
+    # A delete carries the removed row in ``before``; other operations in ``after``.
+    row = event.get("before") if operation == "d" else event.get("after")
     if not isinstance(row, dict) or "id" not in row:
         raise ValueError("Change event does not contain an order row with an id")
 
     source_ts_ms = (event.get("source") or {}).get("ts_ms")
+    return ParsedEvent(
+        operation=operation,
+        order_id=int(row["id"]),
+        row=row,
+        source_ts_ms=source_ts_ms,
+        event=event,
+    )
+
+
+def apply_event(message: Any) -> None:
+    parsed = parse_event(message.value())
+    if parsed is None:
+        return
+
     topic, partition, offset = message.topic(), message.partition(), message.offset()
-    order_id = int(row["id"])
 
     # Commit the projection and dedupe marker together. If the process stops
     # after this transaction but before Kafka offset commit, replay is harmless.
@@ -69,14 +102,14 @@ def apply_event(message: Any) -> None:
                 ON CONFLICT (topic, partition_id, offset_id) DO NOTHING
                 RETURNING id
                 """,
-                (topic, partition, offset, operation, order_id, source_ts_ms, Jsonb(event)),
+                (topic, partition, offset, parsed.operation, parsed.order_id, parsed.source_ts_ms, Jsonb(parsed.event)),
             )
             inserted = cursor.fetchone() is not None
             if not inserted:
                 return
 
-            if operation == "d":
-                cursor.execute("DELETE FROM orders_read_model WHERE id = %s", (order_id,))
+            if parsed.operation == "d":
+                cursor.execute("DELETE FROM orders_read_model WHERE id = %s", (parsed.order_id,))
             else:
                 cursor.execute(
                     """
@@ -92,12 +125,12 @@ def apply_event(message: Any) -> None:
                         source_updated_at = NOW()
                     """,
                     (
-                        order_id,
-                        row["customer_name"],
-                        row["status"],
-                        row["total_cents"],
-                        row["created_at"],
-                        row["updated_at"],
+                        parsed.order_id,
+                        parsed.row["customer_name"],
+                        parsed.row["status"],
+                        parsed.row["total_cents"],
+                        parsed.row["created_at"],
+                        parsed.row["updated_at"],
                     ),
                 )
 

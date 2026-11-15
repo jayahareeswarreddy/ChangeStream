@@ -6,5 +6,9 @@
 .venv/
 .pytest_cache/
 docs/
+tests/
+.github/
+pytest.ini
+requirements-dev.txt
 README.md
 PROJECT_PROMPT.md

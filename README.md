@@ -122,6 +122,24 @@ Start the consumer again and watch the lag return toward zero as the read model 
 docker compose start consumer
 ```
 
+## Tests
+
+Unit tests cover event parsing and validation (valid operations, tombstones, malformed JSON, unsupported shapes) and need no services:
+
+```powershell
+pip install -r requirements-dev.txt
+pytest
+```
+
+Integration tests apply events to a real PostgreSQL read model and assert the pipeline's guarantees — idempotent replay on the `(topic, partition, offset)` key, updates, deletes, tombstone no-ops, and dead-letter de-duplication. They run only when `TEST_DATABASE_URL` points at a throwaway database, so a normal local run never touches the demo data:
+
+```powershell
+$env:TEST_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/read_model_test"
+pytest
+```
+
+GitHub Actions runs both suites on every push and pull request against a PostgreSQL service container (see [.github/workflows/ci.yml](.github/workflows/ci.yml)).
+
 ## Processing and replay behavior
 
 - The consumer disables Kafka auto-commit. It applies each event and records the topic, partition, and offset in the same PostgreSQL transaction, then commits the Kafka offset.
