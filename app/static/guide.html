@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f5f7">
+  <meta name="color-scheme" content="light dark">
+  <title>How ChangeStream works</title>
+  <style>
+    :root{color-scheme:light dark;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text","Segoe UI",sans-serif;font-synthesis:none;text-rendering:optimizeLegibility;--canvas:#f5f5f7;--surface:rgba(255,255,255,.8);--solid:#fff;--soft:#f0f1f5;--ink:#17181c;--muted:#737782;--line:rgba(60,60,67,.14);--blue:#007aff;--blue-soft:rgba(0,122,255,.1);--green:#248a50;--green-soft:rgba(48,209,88,.13);--orange:#b76500;--orange-soft:rgba(255,159,10,.14);--shadow:0 12px 34px rgba(32,39,55,.07);background:var(--canvas);color:var(--ink)}
+    @media(prefers-color-scheme:dark){:root{--canvas:#101114;--surface:rgba(29,30,35,.82);--solid:#1d1e23;--soft:#292a30;--ink:#f5f5f7;--muted:#a1a2aa;--line:rgba(235,235,245,.13);--blue:#0a84ff;--blue-soft:rgba(10,132,255,.17);--green:#32d74b;--green-soft:rgba(50,215,75,.14);--orange:#ffb340;--orange-soft:rgba(255,179,64,.14);--shadow:0 18px 44px rgba(0,0,0,.22)}}
+    *{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:88px}body{margin:0;min-height:100vh;background:radial-gradient(ellipse at 8% 2%,rgba(0,122,255,.07),transparent 31rem),radial-gradient(ellipse at 94% 14%,rgba(175,82,222,.05),transparent 30rem),var(--canvas);color:var(--ink)}a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline}.shell{width:min(940px,calc(100% - 36px));margin:0 auto}
+    .topbar{position:sticky;top:0;z-index:5;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--canvas) 82%,transparent);backdrop-filter:saturate(180%) blur(22px);-webkit-backdrop-filter:saturate(180%) blur(22px)}.topbar-inner{height:66px;display:flex;align-items:center;justify-content:space-between;gap:18px}.brand{display:flex;align-items:center;gap:10px;color:var(--ink);font-weight:720;letter-spacing:-.025em}.mark{display:grid;place-items:center;width:32px;height:32px;border-radius:10px;background:linear-gradient(145deg,#38a1ff,#0066e8);color:white;font-size:16px}.back{display:inline-flex;align-items:center;gap:7px;font-size:13px;font-weight:650}
+    main{padding:46px 0 72px}.eyebrow{margin-bottom:12px;color:var(--blue);font-size:11px;font-weight:720;letter-spacing:.1em;text-transform:uppercase}h1{max-width:760px;margin:0;font-size:clamp(38px,7vw,62px);line-height:1.02;letter-spacing:-.06em}.lead{max-width:720px;margin:15px 0 30px;color:var(--muted);font-size:17px;line-height:1.65}.panel{margin-top:15px;padding:23px;border:1px solid var(--line);border-radius:22px;background:var(--surface);box-shadow:var(--shadow);backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px)}h2{margin:0 0 8px;font-size:19px;letter-spacing:-.03em}.sub{margin:0 0 17px;color:var(--muted);font-size:13px;line-height:1.55}
+    .flow{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:9px}.stage{min-height:114px;padding:13px;border:1px solid var(--line);border-radius:15px;background:var(--solid)}.number{display:grid;place-items:center;width:23px;height:23px;margin-bottom:9px;border-radius:8px;color:var(--blue);background:var(--blue-soft);font-size:11px;font-weight:750}.stage b{display:block;font-size:13px}.stage span{display:block;margin-top:5px;color:var(--muted);font-size:11px;line-height:1.4}.stage.kafka{border-color:color-mix(in srgb,var(--blue) 40%,var(--line));background:var(--blue-soft)}
+    ol{padding-left:23px;margin:14px 0 0}li{padding-left:5px;margin:11px 0;color:var(--muted);font-size:13px;line-height:1.65}li strong{color:var(--ink)}.code{position:relative;margin:12px 0 16px;padding:15px 16px;overflow:auto;border:1px solid var(--line);border-radius:13px;background:var(--soft)}pre{margin:0;color:var(--ink);font:12px/1.7 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre}.code-label{margin:0 0 8px;color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}.columns{display:grid;grid-template-columns:1fr 1fr;gap:12px}.info{padding:16px;border:1px solid var(--line);border-radius:15px;background:var(--solid)}.info h3{margin:0 0 7px;font-size:14px}.info p{margin:0;color:var(--muted);font-size:12px;line-height:1.6}.badge{display:inline-block;margin:2px 3px 2px 0;padding:4px 7px;border-radius:20px;background:var(--green-soft);color:var(--green);font:700 10px ui-monospace,monospace}.notice{padding:14px 16px;border:1px solid color-mix(in srgb,var(--orange) 30%,var(--line));border-radius:14px;background:var(--orange-soft);color:var(--ink);font-size:13px;line-height:1.6}.button{display:inline-flex;align-items:center;gap:8px;margin-top:9px;padding:10px 14px;border-radius:11px;background:var(--blue);color:#fff;font-size:12px;font-weight:680}.button:hover{text-decoration:none;filter:brightness(1.05)}footer{display:flex;justify-content:space-between;gap:12px;padding-top:22px;color:var(--muted);font-size:11px}
+    @media(max-width:760px){.flow{grid-template-columns:repeat(2,minmax(0,1fr))}.stage:last-child{grid-column:span 2}.columns{grid-template-columns:1fr}}
+    @media(max-width:480px){.shell{width:calc(100% - 24px)}main{padding-top:32px}.panel{padding:17px}.flow{grid-template-columns:1fr 1fr}.stage{min-height:105px}footer{flex-direction:column}}
+    @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+  </style>
+</head>
+<body>
+  <div class="topbar"><div class="shell topbar-inner"><a class="brand" href="/"><span class="mark" aria-hidden="true">↗</span><span>ChangeStream</span></a><a class="back" href="/">← Back to dashboard</a></div></div>
+  <main class="shell">
+    <div class="eyebrow">A practical guide · local demo</div>
+    <h1>How ChangeStream works</h1>
+    <p class="lead">ChangeStream demonstrates change data capture (CDC): make a normal PostgreSQL change and follow its event through Debezium and Kafka into a separate read model. The dashboard shows the live component health, events, and resulting data.</p>
+
+    <section class="panel" aria-labelledby="flow-title">
+      <h2 id="flow-title">One database change, five stages</h2><p class="sub">Each stage has a different responsibility. The dashboard’s green status means that service check is currently healthy.</p>
+      <div class="flow">
+        <article class="stage"><span class="number">1</span><b>PostgreSQL source</b><span>Stores the original order. A committed change is written to the WAL.</span></article>
+        <article class="stage"><span class="number">2</span><b>Debezium</b><span>Kafka Connect’s PostgreSQL connector reads WAL changes with pgoutput.</span></article>
+        <article class="stage kafka"><span class="number">3</span><b>Kafka topic</b><span>Persists events in <code>cdc.public.orders</code> for consumers.</span></article>
+        <article class="stage"><span class="number">4</span><b>Python consumer</b><span>Reads events and applies them to the read model.</span></article>
+        <article class="stage"><span class="number">5</span><b>Read model + API</b><span>A separate PostgreSQL database powers the dashboard and query endpoints.</span></article>
+      </div>
+    </section>
+
+    <section class="panel" id="start">
+      <h2>Start the local demo</h2><p class="sub">Docker Desktop must be running. Open PowerShell in the project folder, then start the stack and register the connector:</p>
+      <div class="code"><div class="code-label">PowerShell · run from the project folder</div><pre>if (!(Test-Path .env)) { Copy-Item .env.example .env }
+docker compose up -d
+python scripts/register_connector.py</pre></div>
+      <p class="sub">Open <a href="/">the dashboard</a> at <code>http://localhost:8010</code>. The connector takes an initial snapshot of three sample orders; those events show <code>op: "r"</code>.</p>
+    </section>
+
+    <section class="panel" id="make-change">
+      <h2>Make and follow a change</h2><p class="sub">Run this from the project folder. The status and activity sections on the dashboard refresh every few seconds.</p>
+      <div class="code"><div class="code-label">Insert an order</div><pre>docker compose exec postgres psql -U postgres -d source_db -c "INSERT INTO orders (customer_name, status, total_cents) VALUES ('Demo', 'created', 2500);"</pre></div>
+      <div class="code"><div class="code-label">Update an order</div><pre>docker compose exec postgres psql -U postgres -d source_db -c "UPDATE orders SET status = 'shipped', updated_at = NOW() WHERE id = 1;"</pre></div>
+      <div class="code"><div class="code-label">Delete an order</div><pre>docker compose exec postgres psql -U postgres -d source_db -c "DELETE FROM orders WHERE id = 2;"</pre></div>
+      <p class="sub">The order list shows the current read model; the event table shows the changes that arrived. You can also query the API at <a href="/docs" target="_blank" rel="noopener">/docs</a>.</p>
+    </section>
+
+    <section class="panel" id="inspect">
+      <h2>Inspect Debezium and Kafka directly</h2><p class="sub">The dashboard reports live health. These commands let you inspect the connector’s task and read serialized records from the Kafka topic itself.</p>
+      <div class="columns">
+        <article class="info"><h3>Debezium connector status</h3><p>Open the dashboard’s <strong>Inspect connector</strong> link or run:</p><div class="code"><pre>Invoke-RestMethod http://localhost:8083/connectors/changestream-orders/status | ConvertTo-Json -Depth 5</pre></div><p>Both connector and task should show <code>RUNNING</code>.</p></article>
+        <article class="info"><h3>Watch new Kafka events</h3><p>Start this in one PowerShell window. It waits up to a minute for a new event:</p><div class="code"><pre>docker compose exec kafka /kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:9092 --topic cdc.public.orders --partition 0 --offset latest --timeout-ms 60000</pre></div><p>In another window, run one of the insert/update/delete commands above. Stop the listener with Ctrl+C.</p></article>
+      </div>
+      <div class="code"><div class="code-label">Check all component health</div><pre>Invoke-RestMethod http://localhost:8010/api/services | ConvertTo-Json -Depth 5</pre></div>
+      <div class="notice"><strong>Why did I see old snapshot records?</strong> The Kafka command with <code>--from-beginning</code> starts at the oldest event in the topic. Snapshot events have <code>op: "r"</code>; new inserts, updates, and deletes use <code>c</code>, <code>u</code>, and <code>d</code>.</div>
+    </section>
+
+    <section class="panel" id="events">
+      <h2>What happens to an event?</h2><p class="sub">Debezium sends a change envelope with the row before and after the change, source metadata, and an operation code:</p>
+      <div><span class="badge">r · snapshot</span><span class="badge">c · insert</span><span class="badge">u · update</span><span class="badge">d · delete</span></div>
+      <ol>
+        <li><strong>Consumer reads the Kafka record.</strong> Its topic, partition, and offset identify this exact event.</li>
+        <li><strong>One read-model transaction applies the row and records the event.</strong> A unique topic/partition/offset key prevents duplicate application after a replay.</li>
+        <li><strong>Only after that database transaction succeeds does the consumer commit the Kafka offset.</strong> This is at-least-once delivery with replay protection, not a claim of distributed exactly-once processing.</li>
+      </ol>
+      <p class="sub">Consumer lag is the difference between Kafka’s latest offset and the consumer group’s committed offset. If the consumer is stopped, new changes accumulate and lag rises; starting it again lets the read model catch up.</p>
+    </section>
+
+    <section class="panel">
+      <h2>Scope and cleanup</h2>
+      <p class="sub">This demo captures rows from one sample <code>orders</code> table. It does not currently accept arbitrary PDF/document uploads or answer questions over files; that is a separate RAG workflow. For document upload and grounded Q&amp;A, see <a href="https://rag-eval-7psf.onrender.com" target="_blank" rel="noopener">RAG Eval</a>.</p>
+      <div class="columns"><article class="info"><h3>Stop services</h3><div class="code"><pre>docker compose down</pre></div><p>Stops the containers and preserves the local database volumes.</p></article><article class="info"><h3>Reset sample data</h3><div class="code"><pre>docker compose down -v
+docker compose up -d
+python scripts/register_connector.py</pre></div><p>Deletes local Kafka/PostgreSQL state and re-seeds the sample rows.</p></article></div>
+      <a class="button" href="/">← Return to the live dashboard</a>
+    </section>
+    <footer><span>ChangeStream · local educational demo</span><span><a href="/">Dashboard</a> · <a href="/docs">API docs</a></span></footer>
+  </main>
+</body>
+</html>

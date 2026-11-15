@@ -1,0 +1,95 @@
+name: changestream-jaya-demo
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    command: ["postgres", "-c", "wal_level=logical", "-c", "max_wal_senders=10", "-c", "max_replication_slots=10"]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: source_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d source_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  kafka:
+    image: quay.io/debezium/kafka:${DEBEZIUM_VERSION:-3.7.1.Final}
+    environment:
+      CLUSTER_ID: oh-sxaDRTcyAr6pFRbXyzA
+      NODE_ID: 1
+      NODE_ROLE: combined
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://kafka:9092,CONTROLLER://kafka:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+    volumes:
+      - kafka_data:/kafka/data
+    restart: unless-stopped
+
+  connect:
+    image: quay.io/debezium/connect:${DEBEZIUM_VERSION:-3.7.1.Final}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+    ports:
+      - "8083:8083"
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: changestream-connect
+      CONFIG_STORAGE_TOPIC: changestream_connect_configs
+      OFFSET_STORAGE_TOPIC: changestream_connect_offsets
+      STATUS_STORAGE_TOPIC: changestream_connect_status
+      CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      STATUS_STORAGE_REPLICATION_FACTOR: 1
+    restart: unless-stopped
+
+  consumer:
+    build: ./app
+    command: ["python", "-m", "consumer"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC: cdc.public.orders
+      KAFKA_GROUP_ID: changestream-readmodel
+      SINK_DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/read_model
+      HEARTBEAT_SECONDS: 5
+    restart: unless-stopped
+
+  api:
+    build: ./app
+    command: ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+    environment:
+      SINK_DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/read_model
+      SOURCE_DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/source_db
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC: cdc.public.orders
+      KAFKA_GROUP_ID: changestream-readmodel
+      CONNECT_URL: http://connect:8083
+      CONNECT_PUBLIC_URL: http://localhost:8083
+      CONNECTOR_NAME: changestream-orders
+    ports:
+      - "8010:8000"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  kafka_data:
