@@ -1,5 +1,7 @@
 # ChangeStream
 
+[![CI](https://github.com/jayahareeswarreddy/ChangeStream/actions/workflows/ci.yml/badge.svg)](https://github.com/jayahareeswarreddy/ChangeStream/actions/workflows/ci.yml)
+
 ChangeStream is a local-first CDC pipeline demo: PostgreSQL changes are read from the WAL by Debezium, published to Kafka, then applied to a separate PostgreSQL read model by a Python consumer. A FastAPI service and responsive, system-adaptive dashboard expose the pipeline stages, current projection, recent changes, consumer health, Kafka lag, and quarantined records. The dashboard follows the device light/dark appearance and uses CSS surfaces and gradients rather than a generated background image.
 
 This repository is an educational single-node demo, not a production deployment. Its sample credentials, exposed ports, single Kafka broker, and unencrypted connections are intended only for a local machine.
